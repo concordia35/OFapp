@@ -1,7 +1,7 @@
 Concordia samlet app
-Version 1.2.0
+Version 1.3.0
 
-Nyt i version 1.2.0:
+Nyt i version 1.3.0:
 - Ny Galleri-fane i bundmenuen.
 - Godkendte billeder hentes fra Google Drive via et separat Apps Script.
 - Upload-knap direkte i Galleri-fanen.
@@ -35,3 +35,11 @@ Bemærk:
 
 
 Version 1.1.3: Rettet initiativ-klik og Jeg deltager-dialog, så tilmelding åbner stabilt i PWA/mobilbrowser.
+
+
+VERSION 1.3.0
+=============
+- Ingen kunstig grænse på antal billeder pr. upload.
+- Separat gallerimappe for hver aktivitet i appen og Google Drive.
+- Automatisk status-dropdown i Google Sheet.
+- Aktivitet vælges fra appens arrangementsoversigt ved upload.

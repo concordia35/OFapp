@@ -1,4 +1,4 @@
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.3.0';
 
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
@@ -1724,7 +1724,6 @@ const SignupApp = (() => {
 const GalleryApp = (() => {
   const config = Object.assign({
     appsScriptUrl: '',
-    maxFilesPerUpload: 12,
     maxImageDimension: 1800,
     jpegQuality: 0.82
   }, window.CONCORDIA_GALLERY_CONFIG || {});
@@ -1733,7 +1732,8 @@ const GalleryApp = (() => {
     initialized: false,
     loaded: false,
     loading: false,
-    images: []
+    images: [],
+    activeFolder: ''
   };
 
   const els = {};
@@ -1765,6 +1765,7 @@ const GalleryApp = (() => {
       if(!els.grid || !els.uploadBtn || !els.uploadModal) return;
       bind();
       restoreName();
+      populateActivityOptions();
       state.initialized = true;
       render();
     }
@@ -1791,6 +1792,43 @@ const GalleryApp = (() => {
       const saved = localStorage.getItem('concordia_gallery_uploader');
       if(saved && els.uploaderName) els.uploaderName.value = saved;
     }catch{}
+  }
+
+  function populateActivityOptions(){
+    if(!els.eventName) return;
+    const current = els.eventName.value;
+    const activityOptions = [...events]
+      .filter(item => item && item.title)
+      .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))
+      .map(item => {
+        const dateText = item.date ? shortActivityDate(item.date) : '';
+        const label = [item.title, dateText].filter(Boolean).join(' · ');
+        return { value: label, label };
+      });
+
+    const unique = [];
+    const seen = new Set();
+    activityOptions.forEach(option => {
+      if(seen.has(option.value)) return;
+      seen.add(option.value);
+      unique.push(option);
+    });
+
+    els.eventName.innerHTML = [
+      '<option value="">Vælg aktivitet</option>',
+      ...unique.map(option => `<option value="${escapeAttr(option.value)}">${escapeHtml(option.label)}</option>`),
+      '<option value="Andet">Andet / ikke på listen</option>'
+    ].join('');
+
+    if(current && [...els.eventName.options].some(option => option.value === current)){
+      els.eventName.value = current;
+    }
+  }
+
+  function shortActivityDate(value){
+    const date = new Date(String(value) + 'T12:00:00');
+    if(Number.isNaN(date.getTime())) return '';
+    return new Intl.DateTimeFormat('da-DK', { day: 'numeric', month: 'short', year: 'numeric' }).format(date);
   }
 
   function openUpload(){
@@ -1825,8 +1863,9 @@ const GalleryApp = (() => {
       if(data.ok === false) throw new Error(data.error || 'Ukendt fejl');
       state.images = Array.isArray(data.images) ? data.images : [];
       state.loaded = true;
+      const folderCount = new Set(state.images.map(image => image.event || 'Andet')).size;
       els.syncStatus.textContent = state.images.length
-        ? `${state.images.length} ${state.images.length === 1 ? 'billede' : 'billeder'} i galleriet.`
+        ? `${state.images.length} ${state.images.length === 1 ? 'billede' : 'billeder'} fordelt på ${folderCount} ${folderCount === 1 ? 'aktivitet' : 'aktiviteter'}.`
         : 'Der er endnu ingen godkendte billeder.';
     }catch(error){
       console.error('Kunne ikke hente galleri', error);
@@ -1841,27 +1880,89 @@ const GalleryApp = (() => {
   function render(){
     if(!els.grid) return;
     if(state.loading){
+      els.grid.className = 'gallery-grid';
       els.grid.innerHTML = '<div class="gallery-loading"><div class="loading-spinner" aria-hidden="true"></div><span>Henter galleri…</span></div>';
       return;
     }
     if(!state.images.length){
+      els.grid.className = 'gallery-grid';
       els.grid.innerHTML = '<div class="empty gallery-empty">Ingen billeder at vise endnu.</div>';
       return;
     }
 
-    els.grid.innerHTML = state.images.map((image, index) => {
-      const title = image.event || image.caption || 'Concordia';
-      const meta = [image.event, image.uploader].filter(Boolean).join(' · ');
-      return `
-        <button class="gallery-card" type="button" data-gallery-index="${index}" aria-label="Åbn ${escapeHtml(title)}">
-          <img src="${escapeAttr(image.thumbnailUrl || image.url || '')}" alt="${escapeAttr(title)}" loading="lazy">
-          ${meta ? `<span>${escapeHtml(meta)}</span>` : ''}
-        </button>`;
-    }).join('');
+    const folders = groupByActivity(state.images);
 
+    if(!state.activeFolder || !folders.has(state.activeFolder)){
+      state.activeFolder = '';
+      els.grid.className = 'gallery-grid gallery-folder-grid';
+      els.grid.innerHTML = [...folders.entries()].map(([name, images]) => {
+        const cover = images[0] || {};
+        const latest = formatDate(cover.date);
+        return `
+          <button class="gallery-folder-card" type="button" data-gallery-folder="${escapeAttr(name)}" aria-label="Åbn mappen ${escapeAttr(name)}">
+            <div class="gallery-folder-cover">
+              <img src="${escapeAttr(cover.thumbnailUrl || cover.url || '')}" alt="" loading="lazy">
+              <span class="gallery-folder-icon" aria-hidden="true">▰</span>
+            </div>
+            <div class="gallery-folder-info">
+              <strong>${escapeHtml(name)}</strong>
+              <span>${images.length} ${images.length === 1 ? 'billede' : 'billeder'}${latest ? ` · ${escapeHtml(latest)}` : ''}</span>
+            </div>
+          </button>`;
+      }).join('');
+
+      els.grid.querySelectorAll('[data-gallery-folder]').forEach(button => {
+        button.addEventListener('click', () => {
+          state.activeFolder = button.dataset.galleryFolder || '';
+          render();
+          document.querySelector('.gallery-list-block')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+      });
+      return;
+    }
+
+    const folderImages = folders.get(state.activeFolder) || [];
+    els.grid.className = 'gallery-grid gallery-images-grid';
+    els.grid.innerHTML = `
+      <div class="gallery-folder-toolbar">
+        <button class="gallery-back-btn" type="button" data-gallery-back>‹ Alle aktiviteter</button>
+        <div>
+          <h3>${escapeHtml(state.activeFolder)}</h3>
+          <p>${folderImages.length} ${folderImages.length === 1 ? 'billede' : 'billeder'}</p>
+        </div>
+      </div>
+      ${folderImages.map(image => {
+        const imageIndex = state.images.indexOf(image);
+        const title = image.caption || image.event || 'Concordia';
+        const meta = [image.uploader ? `Foto: ${image.uploader}` : '', formatDate(image.date)].filter(Boolean).join(' · ');
+        return `
+          <button class="gallery-card" type="button" data-gallery-index="${imageIndex}" aria-label="Åbn ${escapeAttr(title)}">
+            <img src="${escapeAttr(image.thumbnailUrl || image.url || '')}" alt="${escapeAttr(title)}" loading="lazy">
+            ${meta ? `<span>${escapeHtml(meta)}</span>` : ''}
+          </button>`;
+      }).join('')}`;
+
+    els.grid.querySelector('[data-gallery-back]')?.addEventListener('click', () => {
+      state.activeFolder = '';
+      render();
+    });
     els.grid.querySelectorAll('[data-gallery-index]').forEach(button => {
       button.addEventListener('click', () => openLargeImage(Number(button.dataset.galleryIndex)));
     });
+  }
+
+  function groupByActivity(images){
+    const groups = new Map();
+    images.forEach(image => {
+      const name = String(image.event || 'Andet').trim() || 'Andet';
+      if(!groups.has(name)) groups.set(name, []);
+      groups.get(name).push(image);
+    });
+    return new Map([...groups.entries()].sort((a, b) => {
+      const aDate = String(a[1][0]?.date || '');
+      const bDate = String(b[1][0]?.date || '');
+      return bDate.localeCompare(aDate) || a[0].localeCompare(b[0], 'da');
+    }));
   }
 
   function openLargeImage(index){
@@ -1901,19 +2002,19 @@ const GalleryApp = (() => {
     const files = [...(els.fileInput.files || [])];
     const uploader = els.uploaderName.value.trim();
     const eventName = els.eventName.value.trim();
-    const maxFiles = Math.max(1, Number(config.maxFilesPerUpload) || 12);
 
     if(!uploader){
       els.uploadStatus.textContent = 'Skriv dit navn.';
       els.uploaderName.focus();
       return;
     }
-    if(!files.length){
-      els.uploadStatus.textContent = 'Vælg mindst ét billede.';
+    if(!eventName){
+      els.uploadStatus.textContent = 'Vælg hvilken aktivitet billederne hører til.';
+      els.eventName.focus();
       return;
     }
-    if(files.length > maxFiles){
-      els.uploadStatus.textContent = `Du kan uploade højst ${maxFiles} billeder ad gangen.`;
+    if(!files.length){
+      els.uploadStatus.textContent = 'Vælg mindst ét billede.';
       return;
     }
     if(files.some(file => !String(file.type || '').startsWith('image/'))){
@@ -1953,7 +2054,6 @@ const GalleryApp = (() => {
         : 'Billederne er sendt. Google bekræftede ikke svaret, så kontrollér indbakken i Drive.';
 
       els.fileInput.value = '';
-      els.eventName.value = '';
       updateSelectedFiles();
       setTimeout(() => {
         if(els.uploadModal.open) els.uploadModal.close();
@@ -2066,7 +2166,7 @@ const GalleryApp = (() => {
     const message = String(error?.message || '');
     if(message.includes('Billedformatet')) return message;
     if(message.includes('komprimeres')) return message;
-    return 'Uploaden mislykkedes. Prøv igen med færre billeder.';
+    return 'Uploaden mislykkedes. Kontrollér forbindelsen og prøv igen.';
   }
 
   function formatDate(value){
